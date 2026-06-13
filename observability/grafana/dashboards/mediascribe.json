@@ -1,0 +1,235 @@
+{
+  "title": "MediaScribe",
+  "uid": "mediascribe",
+  "schemaVersion": 39,
+  "version": 9,
+  "refresh": "10s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "🕐 Messages Waiting in Queue",
+      "description": "Jobs sitting in RabbitMQ waiting to be picked up by a worker. Green = idle, yellow = building up, red = backlog is large.",
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 6 },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "0",
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 5 },
+              { "color": "red", "value": 20 }
+            ]
+          }
+        }
+      },
+      "targets": [{
+        "expr": "sum(rabbitmq_queue_messages_ready{queue=\"transcription\"})",
+        "legendFormat": "waiting"
+      }]
+    },
+
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "⚙️ Chunks Being Transcribed Now",
+      "description": "Audio chunks currently running through Whisper. Long files are split into multiple chunks processed in parallel — this shows how many are active right now across all worker processes.",
+      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 6 },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "0",
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "text", "value": null },
+              { "color": "blue", "value": 1 }
+            ]
+          }
+        }
+      },
+      "targets": [{
+        "expr": "sum(mediascribe_chunks_in_progress) or vector(0)",
+        "legendFormat": "chunks"
+      }]
+    },
+
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "❌ Job Failures (last 5 min)",
+      "description": "Rate of failed jobs per minute averaged over the last 5 minutes. Green = no failures. Any red here means jobs are failing — check the error message in the UI.",
+      "gridPos": { "x": 12, "y": 0, "w": 6, "h": 6 },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 2,
+          "noValue": "0",
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 0.01 }
+            ]
+          }
+        }
+      },
+      "targets": [{
+        "expr": "sum(rate(mediascribe_jobs_failed_total[5m])) * 60 or vector(0)",
+        "legendFormat": "failures/min"
+      }]
+    },
+
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "🔁 Reaper Runs (last 5 min)",
+      "description": "How many times the stuck-job reaper (Celery Beat) has fired in the last 5 minutes. Should be green once the scheduler is running. Red = Beat is not running — stuck jobs will never auto-recover.",
+      "gridPos": { "x": 18, "y": 0, "w": 6, "h": 6 },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "0",
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          }
+        }
+      },
+      "targets": [{
+        "expr": "round(sum(increase(mediascribe_reaper_runs_total[5m]))) or vector(0)",
+        "legendFormat": "runs"
+      }]
+    },
+
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Jobs in Flight",
+      "description": "Jobs currently being processed by the worker. Rises when orchestration starts, falls when the job completes or fails. Healthy: brief peaks that return to 0. Warning: keeps climbing → worker is falling behind.",
+      "gridPos": { "x": 0, "y": 6, "w": 12, "h": 8 },
+      "options": {
+        "tooltip": { "mode": "single", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "custom": { "lineWidth": 2, "fillOpacity": 20 },
+          "color": { "fixedColor": "blue", "mode": "fixed" }
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(mediascribe_jobs_in_flight) or vector(0)",
+          "legendFormat": "Jobs in flight"
+        }
+      ]
+    },
+
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Job Latency — End-to-End (p50 / p95)",
+      "description": "Time from file upload to completed transcript.\n\np50 = typical job duration.\np95 = worst-case for 95% of jobs.\n\nHealthy: stable lines. Warning: p95 climbs while p50 stays flat → occasional slow outliers. Critical: both climb → worker is saturated.",
+      "gridPos": { "x": 0, "y": 14, "w": 24, "h": 8 },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 1,
+          "custom": { "lineWidth": 2, "fillOpacity": 10 }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "p50" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "p95" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(mediascribe_job_latency_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(mediascribe_job_latency_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p95"
+        }
+      ]
+    },
+
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Chunk Activity — Parallel Worker Load",
+      "description": "How many audio chunks were being transcribed by Whisper at each point in time.\n\nLong files are split into multiple chunks processed in parallel, so a single job can drive this above 1.\n\nHealthy: spikes up when jobs arrive, drops back to 0 when done.\nWarning: stays high continuously → worker is CPU-saturated or a chunk is stuck.",
+      "gridPos": { "x": 12, "y": 6, "w": 12, "h": 8 },
+      "options": {
+        "tooltip": { "mode": "single", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "custom": { "lineWidth": 2, "fillOpacity": 20 },
+          "color": { "fixedColor": "purple", "mode": "fixed" }
+        }
+      },
+      "targets": [{
+        "expr": "sum(mediascribe_chunks_in_progress) or vector(0)",
+        "legendFormat": "Active chunks"
+      }]
+    }
+
+  ]
+}

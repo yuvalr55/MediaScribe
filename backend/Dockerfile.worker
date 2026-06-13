@@ -1,0 +1,21 @@
+FROM python:3.11-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg curl \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+COPY pyproject.toml requirements.lock ./
+RUN pip install --upgrade pip && pip install -c requirements.lock ".[worker]"
+
+COPY app ./app
+
+RUN useradd --create-home appuser \
+    && mkdir -p /data/uploads \
+    && chown -R appuser /app /data
+USER appuser

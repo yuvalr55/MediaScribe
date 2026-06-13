@@ -1,0 +1,69 @@
+groups:
+  - name: mediascribe
+    interval: 30s
+    rules:
+
+      # Queue backing up — more than 20 messages waiting for over 2 minutes.
+      # Indicates the worker cannot keep up with upload rate.
+      - alert: TranscriptionQueueBacklog
+        expr: rabbitmq_queue_messages_ready{queue="transcription"} > 20
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Transcription queue backlog"
+          description: "{{ $value }} jobs waiting — worker may be overloaded or stuck."
+
+      # Worker appears dead — queue has messages but nothing is being processed.
+      - alert: WorkerIdle
+        expr: >
+          (rabbitmq_queue_messages_ready{queue="transcription"} > 0)
+          and
+          (sum(mediascribe_chunks_in_progress) or vector(0)) == 0
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Worker idle with jobs queued"
+          description: "Jobs are queued but no chunks are processing — worker may be down."
+
+      # Elevated failure rate — more than 1 job failing per minute on average.
+      - alert: HighJobFailureRate
+        expr: sum(rate(mediascribe_jobs_failed_total[5m])) * 60 > 1
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Elevated job failure rate"
+          description: "{{ $value | printf \"%.2f\" }} jobs/min failing over the last 5 minutes."
+
+      # Celery beat should schedule the stuck-job reaper roughly once a minute.
+      # This checks the scheduled task is actually being executed by a worker.
+      - alert: StuckJobReaperNotRunning
+        expr: (sum(increase(mediascribe_reaper_runs_total[3m])) or vector(0)) == 0
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Stuck-job reaper is not running"
+          description: "No stuck-job reaper execution was observed recently — Celery beat or worker scheduling may be down."
+
+      # Worker metrics endpoint is unreachable.
+      - alert: WorkerMetricsDown
+        expr: up{job="worker"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Worker metrics endpoint is down"
+          description: "Prometheus cannot scrape the worker — it may have crashed."
+
+      # API metrics endpoint is unreachable.
+      - alert: ApiMetricsDown
+        expr: up{job="api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "API metrics endpoint is down"
+          description: "Prometheus cannot scrape the API — it may have crashed."

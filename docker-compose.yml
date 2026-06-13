@@ -1,0 +1,137 @@
+# MediaScribe — full stack in one command:  docker compose up --build
+# Observability (Prometheus + Grafana) is opt-in:
+#     docker compose --profile observability up --build
+name: mediascribe
+
+x-backend-env: &backend-env
+  env_file: ./backend/.env
+
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - mongo-data:/data/db
+      - mongo-configdb:/data/configdb
+    ports:
+      - "27017:27017"
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    restart: unless-stopped
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    environment:
+      RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: "-rabbitmq_prometheus return_per_object_metrics true"
+    ports:
+      - "5672:5672"     # AMQP
+      - "15672:15672"   # management UI
+      - "15692:15692"   # Prometheus metrics
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    command: >
+      sh -c "rabbitmq-plugins enable rabbitmq_prometheus &&
+             rabbitmq-server"
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.api
+    <<: *backend-env
+    restart: unless-stopped
+    depends_on:
+      mongo: {condition: service_healthy}
+      rabbitmq: {condition: service_healthy}
+    volumes:
+      - media-data:/data/uploads
+    ports:
+      - "8000:8000"
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    <<: *backend-env
+    restart: unless-stopped
+    environment:
+      PROMETHEUS_MULTIPROC_DIR: /tmp/prom-multiproc
+    depends_on:
+      mongo: {condition: service_healthy}
+      rabbitmq: {condition: service_healthy}
+    volumes:
+      - media-data:/data/uploads   # shares uploaded media with the API
+      - hf-cache:/root/.cache/huggingface  # persist model downloads across restarts
+    expose:
+      - "9100"
+    command: >
+      sh -c "mkdir -p /tmp/prom-multiproc &&
+      celery -A app.worker.celery_app:celery_app worker
+      --loglevel=INFO --concurrency=$${CELERY_CONCURRENCY:-4}
+      --without-gossip --without-mingle --without-heartbeat"
+
+  beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    <<: *backend-env
+    restart: unless-stopped
+    depends_on:
+      mongo: {condition: service_healthy}
+      rabbitmq: {condition: service_healthy}
+    command: >
+      celery -A app.worker.celery_app:celery_app beat --loglevel=INFO
+
+  frontend:
+    build:
+      context: ./frontend
+      # Vite bakes VITE_* vars into the bundle at build time, so they must be
+      # supplied as build args here (not as runtime env_file).
+      args:
+        - VITE_API_BASE_URL=/api
+        - VITE_MAX_UPLOAD_MB=2048
+        - VITE_POLL_INTERVAL_MS=1500
+        - VITE_API_AUTH_TOKEN=${API_AUTH_TOKEN:-}
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "3000:8080"
+
+  prometheus:
+    image: prom/prometheus:latest
+    profiles: ["observability"]
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:latest
+    profiles: ["observability"]
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Admin"
+    volumes:
+      - ./observability/grafana:/etc/grafana/provisioning
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
+
+volumes:
+  mongo-data:
+  mongo-configdb:
+  rabbitmq-data:
+  prometheus-data:
+  media-data:
+  hf-cache:   # Hugging Face model cache — survives container restarts

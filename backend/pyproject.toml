@@ -1,0 +1,77 @@
+[project]
+name = "mediascribe"
+version = "1.0.0"
+description = "Upload media, get a transcription. Async, chunked, production-grade."
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.30",
+    "python-multipart>=0.0.9",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "motor>=3.4",
+    "beanie>=1.26,<2.0",
+    "pymongo>=4.7",
+    "celery>=5.4",
+    "kombu>=5.3",
+    "prometheus-client>=0.20",
+    "prometheus-fastapi-instrumentator>=7.0",
+]
+
+[project.optional-dependencies]
+beat = [
+    # Minimal scheduler: query Mongo for stuck jobs, send tasks to the broker.
+    "pymongo>=4.7",
+    "celery>=5.4",
+    "kombu>=5.3",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+]
+worker = [
+    # Transcription — heavy, only needed by the worker.
+    # faster-whisper uses CTranslate2: 3-4x faster than transformers on CPU.
+    "faster-whisper>=1.0",
+]
+dev = [
+    "pytest>=8.2",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=5.0",
+    "httpx>=0.27",
+    "mongomock-motor>=0.0.29",
+    "ruff>=0.5",
+    "mypy>=1.10",
+]
+
+[tool.ruff]
+line-length = 90
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "ARG"]
+ignore = [
+    "B008",   # FastAPI's `Depends()`/`File()` defaults are the framework idiom
+    "UP042",  # `str, Enum` is intentional for JSON-friendly serialization
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Pytest fixtures are injected by name and often used only for their side
+# effects (DB init), which ruff reads as "unused argument".
+"tests/**" = ["ARG001"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_ignores = true
+disallow_untyped_defs = false
+plugins = []
+
+[[tool.mypy.overrides]]
+module = ["celery", "celery.*", "kombu", "kombu.*", "faster_whisper", "faster_whisper.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-q --cov=app --cov-report=term-missing"
+
+[tool.coverage.run]
+omit = ["app/worker/services/transcription/whisper.py"]  # requires torch/model in CI
